@@ -4,7 +4,7 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow
 LDFLAGS ?=
 LDLIBS ?= -lm
 
-.PHONY: all clean
+.PHONY: all clean test
 all: bno085_rpy
 
 bno085_rpy: src/main.c src/bno085.c src/bno085.h
@@ -12,3 +12,6 @@ bno085_rpy: src/main.c src/bno085.c src/bno085.h
 
 clean:
 	rm -f bno085_rpy
+
+test:
+	python3 tests/test_lifecycle.py

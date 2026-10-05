@@ -8,6 +8,7 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 #include <math.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,6 +36,12 @@ static bool feature_confirmed;
 static bool sensor_seen;
 static uint8_t sensor_next;
 static double last_report_host_time;
+static volatile sig_atomic_t stop_requested;
+
+void bno085_request_stop(void)
+{
+    stop_requested = 1;
+}
 
 struct cargo {
     uint16_t length;                 /* 첫 transfer의 header + cargo length */
@@ -78,6 +85,8 @@ static void message(const char *format, ...)
 static int system_error(const char *operation)
 {
     int saved_errno = errno;
+    if (stop_requested && saved_errno == EINTR)
+        return -1;
     message("[ERROR] %s: errno=%d (%s)\n", operation,
             saved_errno, strerror(saved_errno));
     return -1;
@@ -186,6 +195,8 @@ static int wait_ready(double deadline)
     if (deadline < 0.0)
         return -1;
     for (;;) {
+        if (stop_requested)
+            return 0;
         double now = seconds(CLOCK_MONOTONIC);
         if (now < 0.0)
             return -1;
@@ -208,6 +219,8 @@ static int send_packet(uint8_t channel, const uint8_t *payload, size_t size)
     uint8_t wire[I2C_RX_TRANSFER_BYTES];
     size_t length = size + SHTP_HEADER_BYTES;
     if (channel >= SHTP_CHANNEL_COUNT || size == 0 || length > sizeof(wire))
+        return -1;
+    if (stop_requested)
         return -1;
     wire[0] = (uint8_t)(length & 0xFFu);
     wire[1] = (uint8_t)(length >> 8);
@@ -241,6 +254,8 @@ static int receive_cargo(struct cargo *out, double deadline)
     for (;;) {
         int ready = wait_ready(deadline);
         if (ready <= 0) {
+            if (stop_requested)
+                return 0;
             if (!first)
                 message("[ERROR] incomplete cargo: continuation timeout/error\n");
             return first ? ready : -1;
@@ -263,13 +278,19 @@ static int receive_cargo(struct cargo *out, double deadline)
         uint16_t length = (uint16_t)(encoded & SHTP_LENGTH_MASK);
         uint8_t channel = wire[2], sequence = wire[3];
         bool continuation = (encoded & SHTP_CONTINUATION) != 0;
-        out->wire_bytes += (size_t)count;
         if (PRINT_PROTOCOL)
             message("[SHTP] length=%u channel=%u sequence=%u continuation=%u\n",
                     (unsigned)length, (unsigned)channel, (unsigned)sequence,
                     (unsigned)continuation);
-        if (encoded == 0 && first)
-            return 0; /* null header: 성공한 boot packet으로 세지 않는다. */
+        if (encoded == 0 && first) {
+            /* 빈 응답은 아직 cargo가 없다는 뜻이다. 실제 deadline 또는
+             * Ctrl+C까지 기다린다. H_INTN LOW 고정 시 busy loop도 막는다. */
+            const struct timespec pause = {0, 1000000};
+            if (nanosleep(&pause, NULL) < 0 && errno != EINTR)
+                return system_error("nanosleep after null header");
+            continue;
+        }
+        out->wire_bytes += (size_t)count;
         if (encoded == SHTP_ERROR_LENGTH || length <= SHTP_HEADER_BYTES ||
             length > SHTP_MAX_LENGTH || channel >= SHTP_CHANNEL_COUNT) {
             message("[ERROR] invalid SHTP header: encoded length=0x%04X\n",
@@ -353,6 +374,8 @@ static int wait_boot(void)
     for (;;) {
         int result = receive_cargo(&c, deadline);
         if (result <= 0) {
+            if (stop_requested)
+                return -1;
             message("[ERROR] boot incomplete: advertisement=%u reset=%u initialize=%u\n",
                     (unsigned)advertisement, (unsigned)reset, (unsigned)initialize);
             return -1;
@@ -401,6 +424,8 @@ static int verify_product(void)
         for (;;) {
             int result = receive_cargo(&c, deadline);
             if (result < 0)
+                return -1;
+            if (stop_requested)
                 return -1;
             if (result == 0)
                 break;
@@ -700,7 +725,7 @@ static int parse_control_cargo(const struct cargo *c)
             return -1;
         }
         if (p[0] == SH2_COMMAND_RESPONSE && p[2] == SH2_INITIALIZE_UNSOLICITED) {
-            message("[ERROR] unexpected SH-2 reset; stream 종료 후 다시 초기화 필요\n");
+            message("[ERROR] unexpected SH-2 reset; 재초기화 필요\n");
             return -1;
         }
         if (p[0] == SH2_GET_FEATURE_RESPONSE) {
@@ -730,7 +755,7 @@ static int process_stream_cargo(const struct cargo *c)
     if (c->channel == SHTP_CH_CONTROL)
         return parse_control_cargo(c);
     if (c->channel == SHTP_CH_EXECUTABLE && c->payload_length == 1 && c->payload[0] == EXECUTABLE_RESET) {
-        message("[ERROR] unexpected executable reset complete; stream 종료\n");
+        message("[ERROR] unexpected executable reset complete; 재초기화 필요\n");
         return -1;
     }
     message("[SHTP] channel %u: raw log에만 기록\n", (unsigned)c->channel);
@@ -757,6 +782,8 @@ int bno085_enable_rotation_vector(void)
     while (!feature_confirmed) {
         int result = receive_cargo(&c, deadline);
         if (result <= 0) {
+            if (stop_requested)
+                return -1;
             message("[ERROR] matching Rotation Vector Get Feature Response timeout/error\n");
             return -1;
         }
@@ -820,6 +847,8 @@ int bno085_init(void)
         return system_error("I2C_SLAVE");
     message("[I2C] Selecting 7-bit address 0x%02X ... OK (ACK 미검증)\n", BNO085_ADDR);
     if (open_interrupt_line() < 0 || drain_pending() < 0)
+        return -1;
+    if (stop_requested)
         return -1;
     message("[BNO085] software reset TX\n");
     if (send_packet(SHTP_CH_EXECUTABLE, reset, sizeof(reset)) < 0)

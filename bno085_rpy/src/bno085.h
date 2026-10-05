@@ -18,6 +18,7 @@
 #define BOOT_TIMEOUT_MS 5000
 #define READ_TIMEOUT_MS 500
 #define MAX_RETRIES 3
+#define RECONNECT_DELAY_MS 1000
 
 /* ======================================
  * SYSTEM CONFIGURATION
@@ -109,5 +110,7 @@ int bno085_enable_rotation_vector(void);
 /* >0 = 출력한 Rotation Vector report 수, 0 = timeout/기타 packet, -1 = 오류. */
 int bno085_read(void);
 int bno085_close(void);
+/* signal handler에서 호출 가능: flag만 설정하며 I/O는 하지 않는다. */
+void bno085_request_stop(void);
 
 #endif

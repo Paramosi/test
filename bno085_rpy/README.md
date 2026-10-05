@@ -1,5 +1,22 @@
 # Stage 4 — 순수 C BNO085 RPY 프로그램 최종 정리
 
+## 실행 로그 이후 수정 — 2026-10-06
+
+리셋 직후 `length=0` 응답 하나만으로 `boot incomplete`를 반환하던 오류를 수정했다. 빈 응답은 boot 성공으로 세지 않으며, H_INTN을 확인하면서 실제 5초 deadline까지 기다린다. Product ID와 Get Feature 대기도 같은 수신 함수를 사용하므로 빈 응답에서 조기 종료하지 않는다.
+
+프로그램은 Ctrl+C 또는 SIGTERM까지 실행한다. 초기화/설정/수신 오류가 나면 열린 device와 log를 닫고 1초 후 다시 초기화한다. 센서가 예기치 않게 reset되면 같은 경로로 Rotation Vector를 다시 설정한다. 정상적인 500-ms idle에서는 재초기화하지 않는다. 기존 log는 append한다. 실제 센서가 응답하지 않는 동안에는 RPY data를 만들지 않으며 재시도 메시지만 나온다.
+
+Ctrl+C는 signal handler에서 flag만 설정하고 GPIO 대기, 빈 응답 대기, 재시도 대기를 중단한다. 진행 중인 I2C syscall의 종료 시점은 Linux driver에 달려 있다. 정상 cleanup은 exit=0이며 log flush/close 오류가 있으면 exit=1이다. 아래 Stage 4 내용은 원래 검증 기록이고, 이 수정의 실제 Pi/BNO085 수신은 현장 재확인이 필요하다.
+
+검증: Windows GCC 15.2.0에서 production C를 포함한 mock regression의 수신/종료/재시도 **19개 시나리오가 통과**했다. `-Werror`를 포함한 strict warning으로 컴파일했다. 빈 응답 후 boot/Product ID/feature 수신, 실제 deadline, 276-byte 광고의 분할 수신, 정상 idle, 초기화/설정/수신 오류 후 재시도, 대기 중 Ctrl+C, cleanup 오류를 확인했다. Windows에서는 최소한의 Linux/POSIX test 선언을 사용하므로 실제 Linux UAPI/하드웨어 검증은 아니다. 재현: `python3 tests/test_lifecycle.py` 또는 Pi에서 `make test`.
+
+```bash
+cd ~/test/bno085_rpy
+make
+sudo ./bno085_rpy
+# Ctrl+C로 종료
+```
+
 ## 1. 이번 Stage의 목적
 
 Raspberry Pi Zero 2 W와 BNO085 사이의 순수 C 프로그램을 최종 정리했다. Rotation Vector 하나만 1 Hz로 활성화하여 raw bytes -> Quaternion -> ZYX Roll/Pitch/Yaw degree를 추적하고 세 log에 기록한다.
@@ -116,21 +133,26 @@ bno085_rpy/
   README.md
 ```
 
-실제 파일: [main.c](src/main.c), [bno085.c](src/bno085.c), [bno085.h](src/bno085.h), [Makefile](Makefile). main은 초기화 -> enable -> read loop -> cleanup으로 유지한다. `bno085.c`의 `rotation_to_euler()`가 Q-format/norm/Euler, `log_orientation()`가 terminal/communication/CSV, `open_rpy_csv()`가 header/append 검증을 처리한다. `bno085.h`의 Q14/Q12는 PROTOCOL CONSTANTS다.
+실제 파일: [main.c](src/main.c), [bno085.c](src/bno085.c), [bno085.h](src/bno085.h), [Makefile](Makefile). main은 초기화 -> enable -> read loop -> cleanup을 반복하며 오류 후 1초 대기하고 재시도한다. `bno085.c`의 `rotation_to_euler()`가 Q-format/norm/Euler, `log_orientation()`가 terminal/communication/CSV, `open_rpy_csv()`가 header/append 검증을 처리한다. `bno085.h`의 Q14/Q12는 PROTOCOL CONSTANTS다.
 
 ```c
-int result = bno085_init();
-if (result == 0 && running)
-    result = bno085_enable_rotation_vector();
-while (result == 0 && running) {
-    if (bno085_read() < 0 && running)
-        result = -1;
+while (running) {
+    int result = bno085_init();
+    if (result == 0 && running)
+        result = bno085_enable_rotation_vector();
+    while (result == 0 && running) {
+        if (bno085_read() < 0 && running)
+            result = -1;
+    }
+    int close_result = bno085_close();
+    if (!running)
+        return close_result == 0 ? 0 : 1;
+    if (reconnect_pause() < 0)
+        return 1;
 }
-if (bno085_close() != 0)
-    result = -1;
 ```
 
-C11, Linux UAPI와 표준 math library만 사용한다. Public API/file 수는 늘리지 않았다.
+C11, Linux UAPI와 표준 math library만 사용한다. signal handler용 `bno085_request_stop()`은 flag만 설정한다.
 
 ## 8. 컴파일 방법
 
@@ -308,7 +330,7 @@ C source/Makefile의 SHA-256이 Stage 3 이후 동일함을 확인했다. 문서
 | Status=0 | sensor quality가 Unreliable; raw transport 성공과 구분 |
 | sequence gap/duplicate | raw log와 report counter 확인; program은 경고 후 raw 출력 |
 | truncated report / continuation mismatch | raw length/header와 공식 규격 대조 |
-| unexpected reset/Initialize | 전원 안정성, 실제 reset message; 현재 stream은 오류 종료 |
+| unexpected reset/Initialize | 전원 안정성, 실제 reset message; 현재 session을 닫고 재초기화 |
 | EIO/packet 손상 | 배선/pull-up/bus timing/clock stretching |
 | log write failed | 저장 공간, permission, filesystem |
 | rpy.csv schema/partial row 오류 | 기존 file을 확인하고 보존/분리한 뒤 새 log로 실행 |
