@@ -7,6 +7,8 @@
  * 참고: CEVA BNO08X Datasheet 1.17 §5.2.1, SHTP 1.10 §3.4.1,
  *       SH-2 Reference Manual 1.9 §§6.3.1-2, 6.4.4.2.
  */
+
+ 
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
