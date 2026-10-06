@@ -114,6 +114,7 @@ static int receive_packet(struct packet *out, const struct timespec *deadline)
             return -1;
         }
         
+        
         struct gpio_v2_line_values values = {0};
         values.mask = 1;
         if (ioctl(int_fd, GPIO_V2_LINE_GET_VALUES_IOCTL, &values) < 0) {
