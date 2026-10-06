@@ -318,6 +318,7 @@ static int read_product_id(void)
 }
 
 
+
 int main(void)
 {
     int result = 1;
