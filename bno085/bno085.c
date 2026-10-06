@@ -1,5 +1,5 @@
 /* Raspberry Pi Zero 2 W + BNO085: Product ID를 한 번 읽고 종료한다.
- * 실행 전 센서 전원을 새로 켠다. 다른 프로그램과 동시에 접근하지 않는다.
+ * 전원을 유지한 채 다시 실행할 수 있다. 다른 프로그램과 동시에 접근하지 않는다.
  * 빌드: gcc -std=c11 -O2 -Wall -Wextra bno085.c -o bno085
  * 실행: sudo ./bno085
  * 배선: SDA=GPIO2(물리 3), SCL=GPIO3(물리 5), INT=GPIO17(물리 11), 공통 GND.
@@ -223,10 +223,15 @@ static int read_product_id(void)
         if (result < 0)
             return -1;
         if (result == 0) {
-            fprintf(stderr, "Boot timeout: advertisement=%u reset=%u initialization=%u. "
-                    "Power-cycle the sensor before running.\n",
-                    (unsigned)advertisement, (unsigned)reset_done, (unsigned)initialized);
-            return -1;
+            /* 부팅 알림은 전원/리셋 직후에만 온다. 재실행에서는 이미 읽었을 수 있다.
+             * 알림이 없다는 이유로 성공 판정하지 않고, 실제 Product ID 응답으로 확인한다. */
+            if (advertisement || reset_done || initialized) {
+                fprintf(stderr, "Incomplete boot: advertisement=%u reset=%u initialization=%u\n",
+                        (unsigned)advertisement, (unsigned)reset_done, (unsigned)initialized);
+                return -1;
+            }
+            puts("No startup packets received; requesting Product ID");
+            break;
         }
         if (packet.channel == CH_COMMAND && packet.size > 1 && packet.data[0] == 0)
             advertisement = true;
@@ -253,7 +258,8 @@ static int read_product_id(void)
             }
         }
     }
-    puts("Sensor startup confirmed");
+    if (advertisement && reset_done && initialized)
+        puts("Sensor startup confirmed");
 
     const uint8_t request[] = {PRODUCT_REQUEST, 0};
     if (clock_gettime(CLOCK_MONOTONIC, &deadline) < 0) {
