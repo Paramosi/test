@@ -8,6 +8,7 @@
  *       SH-2 Reference Manual 1.9 §§6.3.1-2, 6.4.4.2.
  */
 
+ 
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
