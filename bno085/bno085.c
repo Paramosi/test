@@ -48,7 +48,8 @@ static int receive_packet(struct packet *out, const struct timespec *deadline);
 static int send_packet(uint8_t channel, const uint8_t *data, size_t size);
 static int read_product_id(void);
 
-/* Pi의 접근 준비만 수행한다. 실제 센서 응답은 read_product_id()에서 확인한다. */
+/* Pi의 접근 준비만 수행한다. 실제 센서 응답은 read_product_id()에서 확인한다.
+Raspberry Pi 측의 I2C와 INT GPIO를 사용할 준비를 하는 것. */
 static int open_devices(void)
 {
     if (BNO085_ADDR != 0x4A && BNO085_ADDR != 0x4B) {
