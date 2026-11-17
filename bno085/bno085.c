@@ -7,6 +7,8 @@
  * 참고: CEVA BNO08X Datasheet 1.17 §5.2.1, SHTP 1.10 §3.4.1,
  *       SH-2 Reference Manual 1.9 §§6.3.1-2, 6.4.4.2.
  */
+
+ 
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
@@ -113,6 +115,8 @@ static int receive_packet(struct packet *out, const struct timespec *deadline)
             fprintf(stderr, "Incomplete SHTP packet: continuation timeout\n");
             return -1;
         }
+        
+        
         struct gpio_v2_line_values values = {0};
         values.mask = 1;
         if (ioctl(int_fd, GPIO_V2_LINE_GET_VALUES_IOCTL, &values) < 0) {
@@ -314,6 +318,8 @@ static int read_product_id(void)
         }
     }
 }
+
+
 
 int main(void)
 {
